@@ -1,0 +1,59 @@
+name: Build TensorFlow Lite Flex DLL (Windows)
+
+on:
+  workflow_dispatch:        # 手动触发；也可改为 push / tag
+
+jobs:
+  build-flex:
+    runs-on: windows-latest
+    timeout-minutes: 4320     # 大仓库编译时间可能较长
+
+    steps:
+    # 1. 检出当前仓库（可选）
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    # 2. 额外克隆 TensorFlow 指定版本（浅克隆加快下载）
+    - name: Clone TensorFlow r2.15
+      run: git clone --depth 1 --branch r2.15 https://github.com/tensorflow/tensorflow.git tf_src
+
+    # 3. 安装 Bazelisk（自动管理 Bazel 6.1+）
+    - name: Install Bazelisk
+      run: choco install bazelisk --yes
+
+    # 4. 安装 Python 依赖并静默执行 configure.py
+    - name: Run configure.py
+      working-directory: tf_src
+      shell: pwsh        # PowerShell 更易写多行
+      env:
+        PYTHON_BIN_PATH: ${{ env.pythonLocation }}\python.exe
+        TF_ENABLE_XLA: "0"
+        TF_NEED_ROCM: "0"
+        TF_NEED_CUDA: "0"
+        TF_DOWNLOAD_CLANG: "0"
+        TF_SET_ANDROID_WORKSPACE: "0"
+      run: |
+        python -m pip install -U pip numpy wheel packaging
+        echo "|==  running non-interactive configure  ==|"
+        yes "" | python configure.py
+
+    # 5. （可选）启用 BuildBuddy 远程缓存
+    # - name: Prepare .bazelrc for remote cache
+    #   if: secrets.BUILDBUDDY_API_KEY != ''
+    #   working-directory: tf_src
+    #   run: echo "build:ci --remote_cache=grpcs://remote.buildbuddy.io`nbuild:ci --remote_header=x-buildbuddy-api-key=${{ secrets.BUILDBUDDY_API_KEY }}" >> .bazelrc
+
+    # 6. 编译 Flex delegate DLL
+    - name: Build tensorflowlite_flex.dll
+      working-directory: tf_src
+      shell: cmd
+      run: >
+        bazelisk build -c opt --config=monolithic
+        //tensorflow/lite/delegates/flex:tensorflowlite_flex
+
+    # 7. 归档产物
+    - uses: actions/upload-artifact@v4
+      with:
+        name: tensorflowlite_flex.dll
+        path: tf_src\bazel-bin\tensorflow\lite\delegates\flex\tensorflowlite_flex.dll
